@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: java-ai-agent
+
+  # ---------- 长期记忆：MySQL ----------
+  datasource:
+    url: jdbc:mysql://localhost:3306/agent_db?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      # 开发阶段自动建表；生产建议改为 validate 并使用 sql/init.sql 手动初始化
+      ddl-auto: update
+    show-sql: true
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  jackson:
+    time-zone: GMT+8
+    date-format: yyyy-MM-dd HH:mm:ss
+
+server:
+  port: 8080
+
+# ---------- 大模型：阿里云通义千问（DashScope OpenAI 兼容接口） ----------
+qwen:
+  # 建议通过环境变量 QWEN_API_KEY 注入，不要硬编码到仓库
+  api-key: sk-257293fc46c6476e8c91da65882097f9
+  base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model: qwen-plus
+  temperature: 0.7
+
+# ---------- Agent 行为配置 ----------
+agent:
+  memory:
+    # 短期记忆（单会话）保留的最大消息条数
+    short-term-size: 20
+    # 是否启用长期记忆自动抽取（每次对话后调用 LLM 抽取用户画像）
+    extract-enabled: true
