@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Java 智能 Agent 系统</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="app">
+    <!-- 顶栏 -->
+    <header class="topbar">
+        <div class="topbar-brand">
+            <span class="brand-dot"></span>
+            <h1>Java 智能 Agent 系统</h1>
+        </div>
+        <div class="topbar-meta">
+            <span class="meta-chip">Spring Boot</span>
+            <span class="meta-chip">通义千问 Qwen</span>
+            <span class="meta-chip">短 / 长期记忆</span>
+            <span class="meta-chip">RAG</span>
+            <span class="meta-chip">Tool Calling</span>
+            <span class="meta-chip">MCP</span>
+        </div>
+    </header>
+
+    <!-- 功能导航 -->
+    <nav class="nav">
+        <button class="nav-item active" data-view="chat">💬 对话</button>
+        <button class="nav-item" data-view="knowledge">📚 知识库</button>
+        <button class="nav-item" data-view="tool">🔧 工具调用</button>
+        <button class="nav-item" data-view="mcp">🔌 MCP</button>
+    </nav>
+
+    <!-- ============ 对话视图 ============ -->
+    <div class="layout view" id="view-chat">
+        <!-- 左侧：用户 + 记忆面板 -->
+        <aside class="sidebar">
+            <section class="panel">
+                <label class="panel-title" for="userId">用户 ID</label>
+                <input id="userId" class="input" type="text" value="001" placeholder="输入用户 ID，例如 001"
+                       title="不同 userId 拥有独立的会话与画像">
+                <p class="panel-hint">不同用户 ID 拥有独立的会话与长期画像</p>
+            </section>
+
+            <section class="panel panel-grow">
+                <div class="panel-head">
+                    <span class="panel-title">🧠 长期记忆画像</span>
+                    <button id="refreshMemory" class="btn btn-ghost btn-sm" title="刷新记忆">刷新</button>
+                </div>
+                <div id="memoryList" class="memory-list">
+                    <p class="empty" id="memoryEmpty">暂无长期记忆<br>试着告诉 Agent 一些个人信息</p>
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="btn-row">
+                    <button id="newSession" class="btn btn-outline">↺ 新对话</button>
+                    <button id="clearMemory" class="btn btn-danger">🗑 清空记忆</button>
+                </div>
+                <p class="panel-hint">「新对话」清空短期上下文；「清空记忆」连长期画像一起删除</p>
+            </section>
+        </aside>
+
+        <!-- 右侧：聊天区 -->
+        <main class="chat">
+            <div id="messages" class="messages">
+                <div class="welcome">
+                    <div class="welcome-emoji">🤖</div>
+                    <h2>你好，我是你的智能助理 Agent</h2>
+                    <p>我能进行自然语言对话，并记住我们的上下文（短期记忆）和你的个人信息（长期记忆）。</p>
+                    <p class="welcome-tip">试着说一句：<code>我叫王浩，是一名 Java 后端开发</code></p>
+                </div>
+            </div>
+
+            <form id="chatForm" class="composer" autocomplete="off">
+                <textarea id="messageInput" class="composer-input" rows="1"
+                          placeholder="输入你的问题，回车发送（Shift+Enter 换行）"></textarea>
+                <button type="submit" id="sendBtn" class="btn btn-primary">发送</button>
+            </form>
+        </main>
+    </div>
+
+    <!-- ============ 知识库视图（RAG） ============ -->
+    <div class="workspace view" id="view-knowledge" hidden>
+        <section class="work-col">
+            <div class="work-card">
+                <h2 class="view-title">📚 知识库（RAG）</h2>
+                <p class="view-desc">上传文档 → 切分向量化 → 相似度检索 → LLM 生成回答</p>
+                <label class="field-label">文档名称</label>
+                <input id="docName" class="input" type="text" placeholder="例如：公司产品介绍">
+                <label class="field-label">文档内容</label>
+                <textarea id="docContent" class="textarea" rows="8" placeholder="粘贴文档内容…"></textarea>
+                <button id="uploadDoc" class="btn btn-primary">上传文档</button>
+            </div>
+            <div class="work-card">
+                <div class="panel-head">
+                    <span class="panel-title">已入库文档</span>
+                    <button id="refreshDocs" class="btn btn-ghost btn-sm">刷新</button>
+                </div>
+                <div id="docList" class="doc-list"><p class="empty">暂无文档</p></div>
+            </div>
+        </section>
+        <section class="work-col">
+            <div class="work-card">
+                <h2 class="view-title">💬 基于知识库提问</h2>
+                <label class="field-label">问题</label>
+                <textarea id="kbQuestion" class="textarea" rows="3" placeholder="输入你想了解的问题…"></textarea>
+                <button id="kbAsk" class="btn btn-primary">提问</button>
+            </div>
+            <div class="work-card">
+                <div class="panel-head"><span class="panel-title">回答</span></div>
+                <div id="kbAnswer" class="answer-box"></div>
+            </div>
+            <div class="work-card">
+                <div class="panel-head"><span class="panel-title">参考来源</span></div>
+                <div id="kbSources" class="doc-list"></div>
+            </div>
+        </section>
+    </div>
+
+    <!-- ============ 工具调用视图（Function Calling） ============ -->
+    <div class="workspace view" id="view-tool" hidden>
+        <section class="work-col">
+            <div class="work-card">
+                <h2 class="view-title">🔧 工具调用（Function Calling）</h2>
+                <p class="view-desc">模型自主判断并调用工具：查询订单 / 查天气 / 四则运算</p>
+                <label class="field-label">你的问题</label>
+                <textarea id="toolQuestion" class="textarea" rows="3" placeholder="例如：帮我查一下订单 10086 的状态"></textarea>
+                <button id="toolRun" class="btn btn-primary">运行</button>
+            </div>
+            <div class="work-card">
+                <div class="panel-head"><span class="panel-title">回答</span></div>
+                <div id="toolAnswer" class="answer-box"></div>
+            </div>
+            <div class="work-card">
+                <div class="panel-head"><span class="panel-title">调用轨迹</span></div>
+                <div id="toolSteps" class="doc-list"></div>
+            </div>
+        </section>
+        <section class="work-col">
+            <div class="work-card">
+                <div class="panel-head">
+                    <span class="panel-title">已注册工具</span>
+                    <button id="refreshTools" class="btn btn-ghost btn-sm">刷新</button>
+                </div>
+                <div id="toolList" class="doc-list"></div>
+            </div>
+        </section>
+    </div>
+
+    <!-- ============ MCP 视图 ============ -->
+    <div class="workspace view" id="view-mcp" hidden>
+        <section class="work-col">
+            <div class="work-card">
+                <h2 class="view-title">🔌 MCP 扩展</h2>
+                <p class="view-desc">连接 MCP 服务器，发现并调用其工具</p>
+                <label class="field-label">服务器名称</label>
+                <input id="mcpName" class="input" type="text" placeholder="例如：filesystem">
+                <label class="field-label">端点地址（可选）</label>
+                <input id="mcpEndpoint" class="input" type="text" placeholder="http://localhost:9000">
+                <button id="mcpConnect" class="btn btn-primary">连接</button>
+            </div>
+            <div class="work-card">
+                <div class="panel-head"><span class="panel-title">工具调用</span></div>
+                <label class="field-label">服务器</label>
+                <select id="mcpServer" class="input"></select>
+                <label class="field-label">工具</label>
+                <select id="mcpTool" class="input"></select>
+                <label class="field-label">参数（JSON，可选）</label>
+                <textarea id="mcpArgs" class="textarea" rows="3" placeholder='{"path": "/"}'></textarea>
+                <button id="mcpCall" class="btn btn-primary">调用工具</button>
+                <div id="mcpResult" class="answer-box"></div>
+            </div>
+        </section>
+        <section class="work-col">
+            <div class="work-card">
+                <div class="panel-head">
+                    <span class="panel-title">已连接服务器 / 工具</span>
+                    <button id="refreshMcp" class="btn btn-ghost btn-sm">刷新</button>
+                </div>
+                <div id="mcpServers" class="doc-list"></div>
+            </div>
+        </section>
+    </div>
+</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>

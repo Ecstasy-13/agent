@@ -22,6 +22,9 @@ public class QwenProperties {
     /** 采样温度，越大越随机 */
     private double temperature = 0.7;
 
+    /** Embedding 模型名（用于 RAG 文本向量化） */
+    private String embeddingModel = "text-embedding-v3";
+
     public String getApiKey() {
         return apiKey;
     }
@@ -52,5 +55,13 @@ public class QwenProperties {
 
     public void setTemperature(double temperature) {
         this.temperature = temperature;
+    }
+
+    public String getEmbeddingModel() {
+        return embeddingModel;
+    }
+
+    public void setEmbeddingModel(String embeddingModel) {
+        this.embeddingModel = embeddingModel;
     }
 }

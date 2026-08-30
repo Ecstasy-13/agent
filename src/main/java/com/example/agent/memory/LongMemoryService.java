@@ -1,6 +1,7 @@
 package com.example.agent.memory;
 
 import com.example.agent.config.AgentProperties;
+import com.example.agent.dto.MemoryItem;
 import com.example.agent.entity.UserMemory;
 import com.example.agent.llm.QwenClient;
 import com.example.agent.model.Message;
@@ -14,6 +15,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -71,6 +73,28 @@ public class LongMemoryService {
         return memories.stream()
                 .map(m -> m.getMemoryKey() + ": " + m.getMemoryValue())
                 .collect(Collectors.joining("；"));
+    }
+
+    /**
+     * 查询用户全部长期记忆（键值对），用于前端「记忆面板」展示。
+     *
+     * <p>返回空列表表示该用户暂无长期记忆。
+     */
+    public List<MemoryItem> getUserMemories(String userId) {
+        List<UserMemory> memories = repository.findByUserId(userId);
+        if (memories == null || memories.isEmpty()) {
+            return List.of();
+        }
+        return memories.stream()
+                .map(m -> new MemoryItem(m.getMemoryKey(), m.getMemoryValue()))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 清空用户全部长期记忆。
+     */
+    public void clearUserMemory(String userId) {
+        repository.deleteByUserId(userId);
     }
 
     /**
@@ -141,6 +165,14 @@ public class LongMemoryService {
                 },
                 () -> repository.save(new UserMemory(userId, key, value))
         );
+//        Optional<UserMemory> optional = repository.findByUserIdAndMemoryKey(userId, key);
+//        if (optional.isPresent()) {
+//            UserMemory existing = optional.get();
+//            existing.setMemoryValue(value);
+//            repository.save(existing);
+//        } else {
+//            repository.save(new UserMemory(userId, key, value));
+//        }
     }
 
     /** 抽取结果：一条「类型 - 内容」事实 */
