@@ -33,6 +33,10 @@ public class KnowledgeService {
     /** 单个 chunk 最大字符数 */
     private static final int CHUNK_SIZE = 800;
 
+    /** 重叠部分     */
+    private static final int CHUNK_OVERLAP = 150;
+
+
     /** 本地兜底向量维度（远程 Embedding 失败时使用） */
     private static final int VECTOR_DIM = 512;
 
@@ -42,6 +46,10 @@ public class KnowledgeService {
     private final QwenClient qwenClient;
     private final Map<String, Document> documents = new ConcurrentHashMap<>();
     private final AtomicInteger idSeq = new AtomicInteger(0);
+
+    /** 默认最低相似度阈值，仅作为实验初始值，需要根据实际数据调整 */
+    private static final double MIN_SCORE = 0.50;
+
 
     /** 远程 Embedding 是否可用（首次失败后回退到本地向量化） */
     private volatile boolean remoteEmbedding = true;
@@ -73,16 +81,62 @@ public class KnowledgeService {
 
     /** 相似度检索，返回按相关度降序的 TopK 命中 */
     public List<Hit> search(String query, int topK) {
+        // 1. 基本检查
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        // 知识库为空，就没有必要调用 Embedding API
+        if (documents.isEmpty()) {
+            return List.of();
+        }
         float[] queryVector = embed(query);
         List<Hit> hits = new ArrayList<>();
         for (Document doc : documents.values()) {
-            for (Chunk c : doc.chunks()) {
-                hits.add(new Hit(doc.name(), c.text(), cosine(queryVector, c.vector())));
+            List<Chunk> chunks = doc.chunks();
+            for (int chunkIndex = 0; chunkIndex < chunks.size(); chunkIndex++) {
+                Chunk chunk = chunks.get(chunkIndex);
+                double score = cosine(queryVector, chunk.vector());
+                hits.add(new Hit(doc.id(), doc.name(), chunkIndex, chunk.text(), score));
             }
+//            for (Chunk c : doc.chunks()) {
+//                hits.add(new Hit(doc.name(), c.text(), cosine(queryVector, c.vector())));
+//            }
         }
         hits.sort(Comparator.comparingDouble(Hit::score).reversed());
-        int limit = Math.min(Math.max(topK, 1), hits.size());
-        return hits.subList(0, limit);
+        int debugLimit = Math.min(10, hits.size());
+        for (int i = 0; i < debugLimit; i++) {
+            Hit hit = hits.get(i);
+            log.info(
+                    "RAG candidate rank={}, docId={}, chunkIndex={}, score={}, text={}",
+                    i + 1,
+                    hit.documentId(),
+                    hit.chunkIndex(),
+                    String.format("%.4f", hit.score()),
+                    preview(hit.text())
+            );
+        }
+
+        // 6. Threshold 过滤 + TopK
+        int safeTopK = Math.max(topK, 1);
+        return hits.stream()
+                .filter(hit -> hit.score() >= MIN_SCORE)
+                .limit(safeTopK)
+                .toList();
+    }
+
+    private String preview(String text) {
+
+        String normalized = text
+                .replace("\n", " ")
+                .replace("\r", " ");
+
+        int maxLength = 80;
+
+        if (normalized.length() <= maxLength) {
+            return normalized;
+        }
+
+        return normalized.substring(0, maxLength) + "...";
     }
 
     /** 提问：检索 + 生成 */
@@ -118,11 +172,18 @@ public class KnowledgeService {
             if (p.isEmpty()) {
                 continue;
             }
+            if (CHUNK_OVERLAP >= CHUNK_SIZE) {
+                throw new IllegalArgumentException();
+            }
             if (p.length() <= CHUNK_SIZE) {
                 result.add(p);
             } else {
-                for (int i = 0; i < p.length(); i += CHUNK_SIZE) {
-                    result.add(p.substring(i, Math.min(i + CHUNK_SIZE, p.length())));
+                for (int i = 0; i < p.length(); i += CHUNK_SIZE - CHUNK_OVERLAP) {
+                    int end = Math.min(i + CHUNK_SIZE, p.length());
+                    result.add(p.substring(i, end));
+                    if (end == p.length()) {
+                        break;
+                    }
                 }
             }
         }
@@ -132,6 +193,14 @@ public class KnowledgeService {
     // ---------- 向量化 ----------
 
     private float[] embed(String text) {
+        float[] vector = qwenClient.embed(text);
+
+        log.info(
+                "embedding: text={}, dimension={}",
+                text.substring(0, Math.min(20, text.length())),
+                vector.length
+        );
+
         if (remoteEmbedding) {
             try {
                 return qwenClient.embed(text);
@@ -196,7 +265,8 @@ public class KnowledgeService {
     }
 
     /** 检索命中结果 */
-    public record Hit(String documentName, String text, double score) {
+    public record Hit(
+            String documentId, String documentName, int chunkIndex,String text, double score) {
     }
 
     /** 提问结果：回答 + 命中的来源片段 */
