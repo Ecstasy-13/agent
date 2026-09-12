@@ -1,28 +1,161 @@
-/* ==========================================================================
-   Java 智能 Agent 系统 —— 前端逻辑
-   后端接口（同源，无需跨域）：
-     POST   /agent/chat              对话
-     GET    /agent/memory/{userId}   查询长期记忆
-     DELETE /agent/session/{userId}  清空短期会话
-     DELETE /agent/memory/{userId}   清空全部记忆
-     POST   /agent/knowledge/upload  知识库文档入库
-     POST   /agent/knowledge/ask     知识库提问
-     GET    /agent/knowledge/documents 列出文档
-     POST   /agent/tool/call         工具调用对话
-     GET    /agent/tool/list         列出工具
-     POST   /agent/mcp/connect       MCP 连接
-     GET    /agent/mcp/servers       MCP 服务器列表
-     GET    /agent/mcp/tools         MCP 工具列表
-     POST   /agent/mcp/call          MCP 工具调用
-   响应统一结构：{ code, message, data }
-   ========================================================================== */
-
-(function () {
+(() => {
     'use strict';
 
-    // ---------- 通用工具 ----------
-    function escapeHtml(str) {
-        return String(str)
+    const ENDPOINTS = {
+        chat: '/api/v2/agent/chat',
+        clearConversation: (userId, conversationId) =>
+            `/api/v2/agent/users/${encodeURIComponent(userId)}/conversations/${encodeURIComponent(conversationId)}`,
+        memory: (userId) => `/agent/memory/${encodeURIComponent(userId)}`,
+        documents: '/agent/knowledge/documents',
+        knowledgeUpload: '/agent/knowledge/upload',
+        knowledgeAsk: '/agent/knowledge/ask',
+        toolList: '/agent/tool/list',
+        toolCall: '/agent/tool/call',
+        mcpConnect: '/agent/mcp/connect',
+        mcpServers: '/agent/mcp/servers',
+        mcpTools: '/agent/mcp/tools',
+        mcpCall: '/agent/mcp/call',
+        health: '/actuator/health',
+    };
+
+    const MODE_META = {
+        chat: { label: 'V2', title: 'Agent V2', description: 'POST /api/v2/agent/chat · conversation + runtime trace' },
+        rag: { label: 'RAG', title: 'RAG', description: 'Retrieval + answer sources' },
+        tool: { label: 'TOOL', title: 'Tool', description: 'Function calling + execution steps' },
+    };
+
+    const initialUserId = localStorage.getItem('agent.runtime.userId') || '001';
+
+    const state = {
+        view: 'runtime',
+        mode: localStorage.getItem('agent.runtime.mode') || 'chat',
+        userId: initialUserId,
+        conversationId: localStorage.getItem(`agent.runtime.conversationId.${initialUserId}`) || null,
+        messages: [],
+        memory: [],
+        documents: [],
+        tools: [],
+        mcpServers: [],
+        mcpTools: [],
+        activities: [],
+        busy: false,
+        lastRunDuration: null,
+        lastRunId: null,
+        lastUsage: null,
+    };
+
+    const $ = (selector, root = document) => root.querySelector(selector);
+    const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+    const els = {
+        pageTitle: $('#pageTitle'),
+        userId: $('#userId'),
+        newSession: $('#newSession'),
+        healthPill: $('#healthPill'),
+        healthText: $('#healthText'),
+        refreshAll: $('#refreshAll'),
+        inspectorToggle: $('#inspectorToggle'),
+        inspector: $('#inspector'),
+        closeInspector: $('#closeInspector'),
+        messages: $('#messages'),
+        welcome: $('#welcome'),
+        chatForm: $('#chatForm'),
+        messageInput: $('#messageInput'),
+        sendBtn: $('#sendBtn'),
+        modeBadge: $('#modeBadge'),
+        modeDescription: $('#modeDescription'),
+        runStateBadge: $('#runStateBadge'),
+        inspectorMode: $('#inspectorMode'),
+        inspectorUser: $('#inspectorUser'),
+        inspectorConversation: $('#inspectorConversation'),
+        inspectorRunId: $('#inspectorRunId'),
+        inspectorTokens: $('#inspectorTokens'),
+        lastRunDuration: $('#lastRunDuration'),
+        refreshCapabilities: $('#refreshCapabilities'),
+        toolCount: $('#toolCount'),
+        inspectorDocCount: $('#inspectorDocCount'),
+        mcpCount: $('#mcpCount'),
+        memoryList: $('#memoryList'),
+        refreshMemory: $('#refreshMemory'),
+        clearMemory: $('#clearMemory'),
+        activityList: $('#activityList'),
+        clearActivity: $('#clearActivity'),
+        openRagRuntime: $('#openRagRuntime'),
+        openToolRuntime: $('#openToolRuntime'),
+        docName: $('#docName'),
+        docContent: $('#docContent'),
+        uploadDoc: $('#uploadDoc'),
+        refreshDocs: $('#refreshDocs'),
+        docList: $('#docList'),
+        docCount: $('#docCount'),
+        chunkCount: $('#chunkCount'),
+        refreshTools: $('#refreshTools'),
+        toolList: $('#toolList'),
+        refreshMcp: $('#refreshMcp'),
+        mcpName: $('#mcpName'),
+        mcpEndpoint: $('#mcpEndpoint'),
+        mcpConnect: $('#mcpConnect'),
+        mcpServer: $('#mcpServer'),
+        mcpTool: $('#mcpTool'),
+        mcpArgs: $('#mcpArgs'),
+        mcpCall: $('#mcpCall'),
+        mcpServers: $('#mcpServers'),
+        mcpResult: $('#mcpResult'),
+        toastHost: $('#toastHost'),
+    };
+
+    class ApiError extends Error {
+        constructor(message, status = 0, payload = null) {
+            super(message);
+            this.name = 'ApiError';
+            this.status = status;
+            this.payload = payload;
+        }
+    }
+
+    async function request(path, options = {}) {
+        const init = { ...options };
+        init.headers = { ...(options.headers || {}) };
+        if (init.body && !init.headers['Content-Type']) {
+            init.headers['Content-Type'] = 'application/json';
+        }
+
+        const response = await fetch(path, init);
+        const contentType = response.headers.get('content-type') || '';
+        let payload = null;
+
+        if (response.status !== 204) {
+            if (contentType.includes('application/json')) {
+                payload = await response.json();
+            } else {
+                const text = await response.text();
+                payload = text ? { message: text } : null;
+            }
+        }
+
+        if (!response.ok) {
+            const message = payload?.message || `HTTP ${response.status}`;
+            throw new ApiError(message, response.status, payload);
+        }
+
+        // Legacy /agent/* contract: { code, message, data }
+        if (payload && Object.prototype.hasOwnProperty.call(payload, 'code')) {
+            if (payload.code !== 200) {
+                throw new ApiError(payload.message || 'Request failed', response.status, payload);
+            }
+            return payload.data;
+        }
+
+        // Actuator and future runtime endpoints can return native JSON directly.
+        return payload;
+    }
+
+    function post(path, body) {
+        return request(path, { method: 'POST', body: JSON.stringify(body) });
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '')
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
@@ -30,541 +163,755 @@
             .replace(/'/g, '&#39;');
     }
 
-    async function api(path, options) {
-        const res = await fetch(path, options);
-        let body = null;
+    function valueToText(value) {
+        if (value === null || value === undefined) return '—';
+        if (typeof value === 'string') return value;
         try {
-            body = await res.json();
-        } catch (e) {
-            throw new Error('服务返回了非 JSON 内容（HTTP ' + res.status + '）');
+            return JSON.stringify(value, null, 2);
+        } catch (_) {
+            return String(value);
         }
-        if (body.code !== 200) {
-            throw new Error(body.message || '请求失败（HTTP ' + res.status + '）');
-        }
-        return body.data;
     }
-
-    function clear(el) {
-        while (el.firstChild) el.removeChild(el.firstChild);
-    }
-
-    function empty(el, text) {
-        clear(el);
-        const p = document.createElement('p');
-        p.className = 'empty';
-        p.textContent = text;
-        el.appendChild(p);
-    }
-
-    // ==========================================================================
-    // 功能导航切换
-    // ==========================================================================
-    const navItems = document.querySelectorAll('.nav-item');
-    function switchView(name) {
-        navItems.forEach((b) => b.classList.toggle('active', b.dataset.view === name));
-        document.querySelectorAll('.view').forEach((v) => {
-            v.hidden = v.id !== 'view-' + name;
-        });
-    }
-    navItems.forEach((b) => b.addEventListener('click', () => switchView(b.dataset.view)));
-
-    // ==========================================================================
-    // 一、对话视图
-    // ==========================================================================
-    const userIdInput = document.getElementById('userId');
-    const messagesEl = document.getElementById('messages');
-    const chatForm = document.getElementById('chatForm');
-    const messageInput = document.getElementById('messageInput');
-    const sendBtn = document.getElementById('sendBtn');
-    const memoryListEl = document.getElementById('memoryList');
-    const memoryEmptyEl = document.getElementById('memoryEmpty');
-    const refreshMemoryBtn = document.getElementById('refreshMemory');
-    const newSessionBtn = document.getElementById('newSession');
-    const clearMemoryBtn = document.getElementById('clearMemory');
-
-    let history = [];
-    const welcomeEl = messagesEl.querySelector('.welcome');
 
     function currentUserId() {
-        return userIdInput.value.trim();
+        return els.userId.value.trim();
+    }
+
+    function runId() {
+        return `run_${Date.now().toString(36)}`;
+    }
+
+    function formatDuration(ms) {
+        if (ms === null || ms === undefined) return '—';
+        if (ms < 1000) return `${Math.round(ms)} ms`;
+        return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
+    }
+
+    function nowLabel() {
+        return new Intl.DateTimeFormat('zh-CN', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+        }).format(new Date());
+    }
+
+    function toast(message, type = 'success') {
+        const node = document.createElement('div');
+        node.className = `toast ${type}`;
+        node.textContent = message;
+        els.toastHost.appendChild(node);
+        window.setTimeout(() => node.remove(), 3200);
+    }
+
+    function addActivity(title, meta, status = 'success') {
+        state.activities.unshift({ title, meta, status, time: nowLabel() });
+        state.activities = state.activities.slice(0, 12);
+        renderActivity();
+    }
+
+    function renderActivity() {
+        if (!state.activities.length) {
+            els.activityList.innerHTML = '<div class="empty-state">No client activity yet.</div>';
+            return;
+        }
+        els.activityList.innerHTML = state.activities.map((item) => `
+            <div class="activity-item ${escapeHtml(item.status)}">
+                <span class="activity-mark"></span>
+                <div>
+                    <div class="activity-title">${escapeHtml(item.title)}</div>
+                    <div class="activity-meta">${escapeHtml(item.time)} · ${escapeHtml(item.meta)}</div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function setRunState(status) {
+        const label = status === 'running' ? 'RUNNING' : status === 'done' ? 'DONE' : status === 'error' ? 'ERROR' : 'IDLE';
+        els.runStateBadge.className = `state-badge ${status}`;
+        els.runStateBadge.textContent = label;
     }
 
     function setBusy(busy) {
-        sendBtn.disabled = busy;
-        messageInput.disabled = busy;
-        sendBtn.textContent = busy ? '思考中…' : '发送';
+        state.busy = busy;
+        els.messageInput.disabled = busy;
+        els.sendBtn.disabled = busy;
+        els.sendBtn.querySelector('span').textContent = busy ? 'Running' : 'Run';
+        setRunState(busy ? 'running' : 'idle');
     }
 
-    function scrollToBottom() {
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+    function updateRuntimeMeta() {
+        const meta = MODE_META[state.mode];
+        els.modeBadge.textContent = meta.label;
+        els.modeDescription.textContent = meta.description;
+        els.inspectorMode.textContent = meta.title;
+        els.inspectorUser.textContent = state.userId || '—';
+        els.inspectorConversation.textContent = state.conversationId || '—';
+        els.inspectorRunId.textContent = state.lastRunId || '—';
+        els.inspectorTokens.textContent = state.lastUsage?.totalTokens ?? '—';
+        els.lastRunDuration.textContent = formatDuration(state.lastRunDuration);
+        $$('.mode-button').forEach((button) => {
+            button.classList.toggle('active', button.dataset.mode === state.mode);
+        });
+    }
+
+    function setMode(mode) {
+        if (!MODE_META[mode]) return;
+        state.mode = mode;
+        localStorage.setItem('agent.runtime.mode', mode);
+        updateRuntimeMeta();
+        els.messageInput.placeholder = mode === 'rag'
+            ? 'Ask a question grounded in the knowledge base…'
+            : mode === 'tool'
+                ? 'Describe a task that may require a tool…'
+                : 'Send a message to the runtime…';
+        els.messageInput.focus();
+    }
+
+    function switchView(view) {
+        state.view = view;
+        const titles = { runtime: 'Runtime Console', knowledge: 'Knowledge Base', capabilities: 'Capabilities' };
+        els.pageTitle.textContent = titles[view] || 'Agent Runtime';
+        $$('.nav-item').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
+        $$('.view').forEach((node) => { node.hidden = node.id !== `view-${view}`; });
+        if (window.innerWidth <= 960) els.inspector.classList.remove('open');
     }
 
     function renderMessages() {
-        clear(messagesEl);
-        if (history.length === 0) {
-            if (welcomeEl) messagesEl.appendChild(welcomeEl);
+        const welcomeTemplate = els.welcome;
+        els.messages.innerHTML = '';
+
+        if (!state.messages.length && welcomeTemplate) {
+            els.messages.appendChild(welcomeTemplate);
+            bindPromptSuggestions();
             return;
         }
-        for (const item of history) {
-            const div = document.createElement('div');
-            div.className = 'msg ' + item.role;
-            if (item.error) div.classList.add('error');
 
-            const role = document.createElement('div');
-            role.className = 'msg-role';
-            role.textContent = item.role === 'user' ? '我' : 'Agent';
+        state.messages.forEach((item) => {
+            const node = document.createElement('article');
+            node.className = `message ${item.role}${item.error ? ' error' : ''}`;
+            const isUser = item.role === 'user';
+            const modeLabel = item.mode ? MODE_META[item.mode]?.label : null;
+            const traceCount = item.trace?.length || 0;
 
-            const bubble = document.createElement('div');
-            bubble.className = 'bubble';
-            bubble.textContent = item.content;
+            let traceHtml = '';
+            if (traceCount) {
+                traceHtml = `
+                    <details class="trace">
+                        <summary>${item.mode === 'rag' ? 'Retrieval sources' : 'Execution trace'} · ${traceCount}</summary>
+                        <div class="trace-body">
+                            ${item.trace.map((step) => `
+                                <div class="trace-item">
+                                    <div class="trace-title">${escapeHtml(step.title)}</div>
+                                    ${step.args !== undefined ? `<div class="trace-label">${escapeHtml(step.argsLabel || 'Input')}</div><div class="trace-value">${escapeHtml(valueToText(step.args))}</div>` : ''}
+                                    ${step.result !== undefined ? `<div class="trace-label">${escapeHtml(step.resultLabel || 'Result')}</div><div class="trace-value">${escapeHtml(valueToText(step.result))}</div>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </details>`;
+            }
 
-            div.appendChild(role);
-            div.appendChild(bubble);
-            messagesEl.appendChild(div);
-        }
-        scrollToBottom();
+            node.innerHTML = `
+                <div class="message-avatar">${isUser ? 'YOU' : 'AI'}</div>
+                <div class="message-main">
+                    <div class="message-head">
+                        <span class="message-role">${isUser ? 'You' : 'Agent'}</span>
+                        ${modeLabel && !isUser ? `<span class="run-chip">${escapeHtml(modeLabel)}</span>` : ''}
+                        ${item.duration !== undefined ? `<span class="message-meta">${escapeHtml(formatDuration(item.duration))}</span>` : ''}
+                        ${item.usage?.totalTokens != null ? `<span class="message-meta">${escapeHtml(String(item.usage.totalTokens))} tokens</span>` : ''}
+                        ${item.runId ? `<span class="message-meta">${escapeHtml(item.runId)}</span>` : ''}
+                    </div>
+                    <div class="message-body">${escapeHtml(item.content)}</div>
+                    ${traceHtml}
+                </div>`;
+            els.messages.appendChild(node);
+        });
+        els.messages.scrollTop = els.messages.scrollHeight;
     }
 
     function showTyping() {
-        const div = document.createElement('div');
-        div.className = 'msg assistant';
-        div.id = 'typing-indicator';
-        div.innerHTML =
-            '<div class="msg-role">Agent</div>' +
-            '<div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>';
-        messagesEl.appendChild(div);
-        scrollToBottom();
+        const node = document.createElement('article');
+        node.id = 'typingIndicator';
+        node.className = 'message assistant';
+        node.innerHTML = `
+            <div class="message-avatar">AI</div>
+            <div class="message-main">
+                <div class="message-head"><span class="message-role">Agent</span><span class="run-chip">${escapeHtml(MODE_META[state.mode].label)}</span></div>
+                <div class="typing-dots"><span></span><span></span><span></span></div>
+            </div>`;
+        els.messages.appendChild(node);
+        els.messages.scrollTop = els.messages.scrollHeight;
     }
 
     function hideTyping() {
-        const t = document.getElementById('typing-indicator');
-        if (t) t.remove();
+        $('#typingIndicator')?.remove();
     }
 
-    function renderMemory(items) {
-        clear(memoryListEl);
-        if (!items || items.length === 0) {
-            memoryListEl.appendChild(memoryEmptyEl);
-            return;
-        }
-        for (const item of items) {
-            const row = document.createElement('div');
-            row.className = 'memory-item';
-
-            const key = document.createElement('span');
-            key.className = 'memory-key';
-            key.textContent = item.key;
-
-            const value = document.createElement('span');
-            value.className = 'memory-value';
-            value.textContent = item.value;
-
-            row.appendChild(key);
-            row.appendChild(value);
-            memoryListEl.appendChild(row);
-        }
+    function bindPromptSuggestions() {
+        $$('[data-prompt]', els.messages).forEach((button) => {
+            button.addEventListener('click', () => {
+                const targetMode = button.dataset.modeTarget;
+                if (targetMode) setMode(targetMode);
+                els.messageInput.value = button.dataset.prompt || '';
+                autoResizeComposer();
+                els.messageInput.focus();
+            });
+        });
     }
 
-    function loadMemory() {
-        const userId = currentUserId();
-        if (!userId) return;
-        api('/agent/memory/' + encodeURIComponent(userId))
-            .then(renderMemory)
-            .catch((e) => console.warn('加载记忆失败：', e.message));
+    async function executeRun(text) {
+        const mode = state.mode;
+        if (mode === 'chat') {
+            const data = await post(ENDPOINTS.chat, {
+                userId: state.userId,
+                conversationId: state.conversationId || null,
+                message: text,
+            });
+
+            if (data?.conversationId) {
+                state.conversationId = data.conversationId;
+                localStorage.setItem(`agent.runtime.conversationId.${state.userId}`, data.conversationId);
+            }
+
+            state.lastRunId = data?.runId || null;
+            state.lastUsage = data?.usage || null;
+
+            const trace = (data?.steps || []).map((step) => ({
+                title: `${step.index ?? '·'} · ${step.type || step.name || 'STEP'}${step.durationMs != null ? ` · ${formatDuration(step.durationMs)}` : ''}`,
+                argsLabel: 'Name',
+                args: step.name || '—',
+                resultLabel: 'Attributes',
+                result: step.attributes || {},
+            }));
+
+            return {
+                answer: data?.answer || '',
+                trace,
+                runId: data?.runId || null,
+                duration: data?.totalDurationMs,
+                usage: data?.usage || null,
+            };
+        }
+        if (mode === 'rag') {
+            const data = await post(ENDPOINTS.knowledgeAsk, { question: text });
+            const trace = (data?.sources || []).map((source) => ({
+                title: source.document || 'Knowledge source',
+                argsLabel: 'Similarity',
+                args: source.score,
+                resultLabel: 'Chunk',
+                result: source.text,
+            }));
+            return { answer: data?.answer || '', trace };
+        }
+        if (mode === 'tool') {
+            const data = await post(ENDPOINTS.toolCall, { message: text });
+            const trace = (data?.steps || []).map((step) => ({
+                title: step.tool || step.name || 'Tool call',
+                argsLabel: 'Arguments',
+                args: step.arguments ?? step.attributes ?? {},
+                resultLabel: 'Result',
+                result: step.result ?? step.attributes ?? {},
+            }));
+            return { answer: data?.answer || '', trace };
+        }
+        throw new Error(`Unsupported mode: ${mode}`);
     }
 
     async function sendMessage() {
+        if (state.busy) return;
         const userId = currentUserId();
-        const text = messageInput.value.trim();
-        if (!userId || !text || sendBtn.disabled) return;
+        const text = els.messageInput.value.trim();
+        if (!userId) {
+            toast('请先填写 User ID', 'error');
+            els.userId.focus();
+            return;
+        }
+        if (!text) return;
 
-        messageInput.value = '';
-        autoResize();
+        state.userId = userId;
+        localStorage.setItem('agent.runtime.userId', userId);
+        updateRuntimeMeta();
 
-        history.push({ role: 'user', content: text });
+        const activeMode = state.mode;
+        const fallbackRunId = runId();
+        state.messages.push({ role: 'user', content: text });
+        els.messageInput.value = '';
+        autoResizeComposer();
         renderMessages();
         setBusy(true);
         showTyping();
 
+        const startedAt = performance.now();
         try {
-            const data = await api('/agent/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: userId, message: text }),
+            const result = await executeRun(text);
+            const clientDuration = performance.now() - startedAt;
+            const duration = result.duration ?? clientDuration;
+            const effectiveRunId = result.runId || fallbackRunId;
+            state.lastRunDuration = duration;
+            state.lastRunId = effectiveRunId;
+            state.lastUsage = result.usage || state.lastUsage;
+            state.messages.push({
+                role: 'assistant',
+                content: result.answer || '(empty response)',
+                mode: activeMode,
+                trace: result.trace,
+                duration,
+                runId: effectiveRunId,
+                usage: result.usage || null,
             });
-            history.push({ role: 'assistant', content: data.answer });
-        } catch (e) {
-            history.push({ role: 'assistant', content: e.message, error: true });
+            setRunState('done');
+            addActivity(`${MODE_META[activeMode].title} run completed`, `${effectiveRunId} · ${formatDuration(duration)}`, 'success');
+            if (activeMode === 'chat') window.setTimeout(loadMemory, 500);
+        } catch (error) {
+            const duration = performance.now() - startedAt;
+            state.lastRunDuration = duration;
+            state.messages.push({
+                role: 'assistant', content: error.message, mode: activeMode, duration, runId: fallbackRunId, error: true,
+            });
+            state.lastRunId = fallbackRunId;
+            setRunState('error');
+            addActivity(`${MODE_META[activeMode].title} run failed`, `${fallbackRunId} · ${error.message}`, 'error');
         } finally {
             hideTyping();
             renderMessages();
-            setBusy(false);
-            messageInput.focus();
+            state.busy = false;
+            els.messageInput.disabled = false;
+            els.sendBtn.disabled = false;
+            els.sendBtn.querySelector('span').textContent = 'Run';
+            updateRuntimeMeta();
+            els.messageInput.focus();
         }
-        setTimeout(loadMemory, 1200);
     }
 
-    async function newSession() {
+    function autoResizeComposer() {
+        els.messageInput.style.height = 'auto';
+        els.messageInput.style.height = `${Math.min(els.messageInput.scrollHeight, 160)}px`;
+    }
+
+    async function startNewSession() {
+        const userId = currentUserId();
+        if (!userId) return;
+
+        const conversationId = state.conversationId;
+        try {
+            if (conversationId) {
+                await request(ENDPOINTS.clearConversation(userId, conversationId), { method: 'DELETE' });
+            }
+
+            localStorage.removeItem(`agent.runtime.conversationId.${userId}`);
+            state.conversationId = null;
+            state.messages = [];
+            state.lastRunDuration = null;
+            state.lastRunId = null;
+            state.lastUsage = null;
+            renderMessages();
+            updateRuntimeMeta();
+            setRunState('idle');
+            addActivity('Conversation reset', conversationId ? conversationId : `user ${userId}`, 'success');
+            toast(conversationId ? '当前 Conversation 已清空' : '已开始新的 Conversation');
+            switchView('runtime');
+        } catch (error) {
+            toast(`清空 Conversation 失败：${error.message}`, 'error');
+            addActivity('Conversation clear failed', error.message, 'error');
+        }
+    }
+
+    async function loadMemory({ quiet = true } = {}) {
         const userId = currentUserId();
         if (!userId) return;
         try {
-            await api('/agent/session/' + encodeURIComponent(userId), { method: 'DELETE' });
-        } catch (e) {
-            console.warn('清空会话失败：', e.message);
+            state.memory = await request(ENDPOINTS.memory(userId)) || [];
+            renderMemory();
+            if (!quiet) addActivity('Memory refreshed', `${state.memory.length} items`, 'success');
+        } catch (error) {
+            state.memory = [];
+            renderMemory(error.message);
+            if (!quiet) addActivity('Memory refresh failed', error.message, 'error');
         }
-        history = [];
-        renderMessages();
+    }
+
+    function renderMemory(errorMessage = '') {
+        if (errorMessage) {
+            els.memoryList.innerHTML = `<div class="empty-state">${escapeHtml(errorMessage)}</div>`;
+            return;
+        }
+        if (!state.memory.length) {
+            els.memoryList.innerHTML = '<div class="empty-state">No long-term memory.</div>';
+            return;
+        }
+        els.memoryList.innerHTML = state.memory.map((item) => `
+            <div class="memory-item">
+                <span class="memory-key">${escapeHtml(item.key)}</span>
+                <span class="memory-value">${escapeHtml(item.value)}</span>
+            </div>
+        `).join('');
     }
 
     async function clearMemory() {
         const userId = currentUserId();
         if (!userId) return;
-        if (!confirm('确定清空该用户的全部记忆（含长期画像）吗？')) return;
+        if (!window.confirm(`确定清空用户 ${userId} 的短期会话和长期记忆吗？`)) return;
         try {
-            await api('/agent/memory/' + encodeURIComponent(userId), { method: 'DELETE' });
-        } catch (e) {
-            alert('清空记忆失败：' + e.message);
+            await request(ENDPOINTS.memory(userId), { method: 'DELETE' });
+            state.messages = [];
+            state.memory = [];
+            renderMessages();
+            renderMemory();
+            addActivity('User memory cleared', `user ${userId}`, 'success');
+            toast('用户记忆已清空');
+        } catch (error) {
+            toast(`清空记忆失败：${error.message}`, 'error');
+            addActivity('Memory clear failed', error.message, 'error');
+        }
+    }
+
+    async function loadDocuments({ quiet = true } = {}) {
+        try {
+            state.documents = await request(ENDPOINTS.documents) || [];
+            renderDocuments();
+            if (!quiet) addActivity('Knowledge index refreshed', `${state.documents.length} documents`, 'success');
+        } catch (error) {
+            state.documents = [];
+            renderDocuments(error.message);
+            if (!quiet) addActivity('Knowledge refresh failed', error.message, 'error');
+        }
+        updateCapabilityCounts();
+    }
+
+    function renderDocuments(errorMessage = '') {
+        const chunks = state.documents.reduce((sum, doc) => sum + (Number(doc.chunkCount) || 0), 0);
+        els.docCount.textContent = String(state.documents.length);
+        els.chunkCount.textContent = String(chunks);
+        if (errorMessage) {
+            els.docList.innerHTML = `<div class="empty-state">${escapeHtml(errorMessage)}</div>`;
             return;
         }
-        history = [];
-        renderMessages();
-        loadMemory();
-    }
-
-    function autoResize() {
-        messageInput.style.height = 'auto';
-        messageInput.style.height = Math.min(messageInput.scrollHeight, 160) + 'px';
-    }
-
-    chatForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        sendMessage();
-    });
-    messageInput.addEventListener('input', autoResize);
-    messageInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
-        }
-    });
-    userIdInput.addEventListener('change', () => {
-        history = [];
-        renderMessages();
-        loadMemory();
-    });
-    refreshMemoryBtn.addEventListener('click', loadMemory);
-    newSessionBtn.addEventListener('click', newSession);
-    clearMemoryBtn.addEventListener('click', clearMemory);
-
-    // ==========================================================================
-    // 二、知识库视图（RAG）
-    // ==========================================================================
-    const docNameEl = document.getElementById('docName');
-    const docContentEl = document.getElementById('docContent');
-    const uploadDocBtn = document.getElementById('uploadDoc');
-    const refreshDocsBtn = document.getElementById('refreshDocs');
-    const docListEl = document.getElementById('docList');
-    const kbQuestionEl = document.getElementById('kbQuestion');
-    const kbAskBtn = document.getElementById('kbAsk');
-    const kbAnswerEl = document.getElementById('kbAnswer');
-    const kbSourcesEl = document.getElementById('kbSources');
-
-    function renderDocs(docs) {
-        clear(docListEl);
-        if (!docs || docs.length === 0) {
-            empty(docListEl, '暂无文档');
+        if (!state.documents.length) {
+            els.docList.innerHTML = '<div class="empty-state">No documents indexed.</div>';
             return;
         }
-        for (const d of docs) {
-            const row = document.createElement('div');
-            row.className = 'doc-item';
-            row.innerHTML =
-                '<span class="doc-name">' + escapeHtml(d.name) + '</span>' +
-                '<span class="doc-meta">分块数 ' + d.chunkCount + '</span>';
-            docListEl.appendChild(row);
-        }
+        els.docList.innerHTML = state.documents.map((doc) => `
+            <div class="resource-item">
+                <div class="resource-item-head">
+                    <span class="resource-name">${escapeHtml(doc.name)}</span>
+                    <span class="resource-tag">${escapeHtml(doc.chunkCount)} chunks</span>
+                </div>
+                <div class="resource-desc">${escapeHtml(doc.id || 'Indexed document')}</div>
+            </div>
+        `).join('');
     }
 
-    function loadDocs() {
-        api('/agent/knowledge/documents').then(renderDocs)
-            .catch((e) => empty(docListEl, e.message));
-    }
-
-    function renderSources(sources) {
-        clear(kbSourcesEl);
-        if (!sources || sources.length === 0) {
-            empty(kbSourcesEl, '暂无来源');
-            return;
-        }
-        for (const s of sources) {
-            const row = document.createElement('div');
-            row.className = 'step-item';
-            row.innerHTML =
-                '<div class="step-tool">' + escapeHtml(s.document) + '</div>' +
-                '<div>' + escapeHtml(s.text) + '</div>' +
-                '<div class="step-args">相似度 ' + s.score + '</div>';
-            kbSourcesEl.appendChild(row);
-        }
-    }
-
-    async function uploadDoc() {
-        const name = docNameEl.value.trim();
-        const content = docContentEl.value.trim();
+    async function uploadDocument() {
+        const name = els.docName.value.trim();
+        const content = els.docContent.value.trim();
         if (!name || !content) {
-            alert('请填写文档名称和内容');
+            toast('请填写文档名称和内容', 'error');
             return;
         }
-        uploadDocBtn.disabled = true;
+        els.uploadDoc.disabled = true;
+        const previous = els.uploadDoc.textContent;
+        els.uploadDoc.textContent = 'Ingesting…';
+        const startedAt = performance.now();
         try {
-            await api('/agent/knowledge/upload', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: name, content: content }),
-            });
-            docContentEl.value = '';
-            docNameEl.value = '';
-            loadDocs();
-        } catch (e) {
-            alert('上传失败：' + e.message);
+            const data = await post(ENDPOINTS.knowledgeUpload, { name, content });
+            els.docName.value = '';
+            els.docContent.value = '';
+            await loadDocuments();
+            const duration = performance.now() - startedAt;
+            addActivity('Document ingested', `${name} · ${data?.chunkCount ?? '?'} chunks · ${formatDuration(duration)}`, 'success');
+            toast(`已入库：${name}`);
+        } catch (error) {
+            addActivity('Document ingest failed', error.message, 'error');
+            toast(`文档入库失败：${error.message}`, 'error');
         } finally {
-            uploadDocBtn.disabled = false;
+            els.uploadDoc.disabled = false;
+            els.uploadDoc.textContent = previous;
         }
     }
 
-    async function kbAsk() {
-        const question = kbQuestionEl.value.trim();
-        if (!question) return;
-        kbAskBtn.disabled = true;
-        kbAnswerEl.textContent = '检索与生成中…';
+    async function loadTools({ quiet = true } = {}) {
         try {
-            const data = await api('/agent/knowledge/ask', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ question: question }),
+            state.tools = await request(ENDPOINTS.toolList) || [];
+            renderTools();
+            if (!quiet) addActivity('Tools refreshed', `${state.tools.length} registered`, 'success');
+        } catch (error) {
+            state.tools = [];
+            renderTools(error.message);
+            if (!quiet) addActivity('Tool refresh failed', error.message, 'error');
+        }
+        updateCapabilityCounts();
+    }
+
+    function renderTools(errorMessage = '') {
+        if (errorMessage) {
+            els.toolList.innerHTML = `<div class="empty-state">${escapeHtml(errorMessage)}</div>`;
+            return;
+        }
+        if (!state.tools.length) {
+            els.toolList.innerHTML = '<div class="empty-state">No registered tools.</div>';
+            return;
+        }
+        els.toolList.innerHTML = state.tools.map((tool) => `
+            <div class="resource-item">
+                <div class="resource-item-head">
+                    <span class="resource-name">${escapeHtml(tool.name)}</span>
+                    <span class="resource-tag">TOOL</span>
+                </div>
+                <div class="resource-desc">${escapeHtml(tool.description || 'No description')}</div>
+            </div>
+        `).join('');
+    }
+
+    async function loadMcp({ quiet = true } = {}) {
+        const results = await Promise.allSettled([
+            request(ENDPOINTS.mcpServers),
+            request(ENDPOINTS.mcpTools),
+        ]);
+
+        const serverResult = results[0];
+        const toolResult = results[1];
+        let hasError = false;
+        if (serverResult.status === 'fulfilled') state.mcpServers = serverResult.value || [];
+        else { state.mcpServers = []; hasError = true; }
+        if (toolResult.status === 'fulfilled') state.mcpTools = toolResult.value || [];
+        else { state.mcpTools = []; hasError = true; }
+
+        renderMcpServers(serverResult.status === 'rejected' ? serverResult.reason.message : '');
+        fillMcpSelects();
+        updateCapabilityCounts();
+        if (!quiet) {
+            addActivity(
+                hasError ? 'MCP refresh partially failed' : 'MCP refreshed',
+                `${state.mcpServers.length} servers · ${state.mcpTools.length} tools`,
+                hasError ? 'error' : 'success',
+            );
+        }
+    }
+
+    function renderMcpServers(errorMessage = '') {
+        if (errorMessage) {
+            els.mcpServers.innerHTML = `<div class="empty-state">${escapeHtml(errorMessage)}</div>`;
+            return;
+        }
+        if (!state.mcpServers.length) {
+            els.mcpServers.innerHTML = '<div class="empty-state">No MCP servers connected.</div>';
+            return;
+        }
+        els.mcpServers.innerHTML = state.mcpServers.map((server) => `
+            <div class="resource-item">
+                <div class="resource-item-head">
+                    <span class="resource-name">${escapeHtml(server.name)}</span>
+                    <span class="resource-tag">${escapeHtml(server.toolCount ?? 0)} tools</span>
+                </div>
+                <div class="resource-desc">${escapeHtml(server.endpoint || 'Built-in')}</div>
+            </div>
+        `).join('');
+    }
+
+    function fillMcpSelects() {
+        const previousServer = els.mcpServer.value;
+        els.mcpServer.innerHTML = '';
+        state.mcpServers.forEach((server) => {
+            const option = document.createElement('option');
+            option.value = server.name;
+            option.textContent = server.name;
+            els.mcpServer.appendChild(option);
+        });
+        if (previousServer && state.mcpServers.some((server) => server.name === previousServer)) {
+            els.mcpServer.value = previousServer;
+        }
+        fillMcpTools();
+    }
+
+    function fillMcpTools() {
+        const server = els.mcpServer.value;
+        els.mcpTool.innerHTML = '';
+        state.mcpTools
+            .filter((tool) => tool.server === server)
+            .forEach((tool) => {
+                const option = document.createElement('option');
+                option.value = tool.name;
+                option.textContent = tool.description ? `${tool.name} — ${tool.description}` : tool.name;
+                els.mcpTool.appendChild(option);
             });
-            kbAnswerEl.textContent = data.answer;
-            renderSources(data.sources);
-        } catch (e) {
-            kbAnswerEl.textContent = '请求失败：' + e.message;
-            renderSources(null);
-        } finally {
-            kbAskBtn.disabled = false;
-        }
-    }
-
-    uploadDocBtn.addEventListener('click', uploadDoc);
-    refreshDocsBtn.addEventListener('click', loadDocs);
-    kbAskBtn.addEventListener('click', kbAsk);
-
-    // ==========================================================================
-    // 三、工具调用视图（Function Calling）
-    // ==========================================================================
-    const toolQuestionEl = document.getElementById('toolQuestion');
-    const toolRunBtn = document.getElementById('toolRun');
-    const toolAnswerEl = document.getElementById('toolAnswer');
-    const toolStepsEl = document.getElementById('toolSteps');
-    const toolListEl = document.getElementById('toolList');
-    const refreshToolsBtn = document.getElementById('refreshTools');
-
-    function renderTools(tools) {
-        clear(toolListEl);
-        if (!tools || tools.length === 0) {
-            empty(toolListEl, '暂无工具');
-            return;
-        }
-        for (const t of tools) {
-            const row = document.createElement('div');
-            row.className = 'doc-item';
-            row.innerHTML =
-                '<span class="doc-name">' + escapeHtml(t.name) + '</span>' +
-                escapeHtml(t.description);
-            toolListEl.appendChild(row);
-        }
-    }
-
-    function loadTools() {
-        api('/agent/tool/list').then(renderTools)
-            .catch((e) => empty(toolListEl, e.message));
-    }
-
-    function renderSteps(steps) {
-        clear(toolStepsEl);
-        if (!steps || steps.length === 0) {
-            empty(toolStepsEl, '本次未调用工具');
-            return;
-        }
-        for (const s of steps) {
-            const row = document.createElement('div');
-            row.className = 'step-item';
-            row.innerHTML =
-                '<div class="step-tool">' + escapeHtml(s.tool) + '</div>' +
-                '<div class="step-args">参数：' + escapeHtml(s.arguments) + '</div>' +
-                '<div>结果：' + escapeHtml(s.result) + '</div>';
-            toolStepsEl.appendChild(row);
-        }
-    }
-
-    async function runTool() {
-        const message = toolQuestionEl.value.trim();
-        if (!message) return;
-        toolRunBtn.disabled = true;
-        toolAnswerEl.textContent = '调用中…';
-        try {
-            const data = await api('/agent/tool/call', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: message }),
-            });
-            toolAnswerEl.textContent = data.answer;
-            renderSteps(data.steps);
-        } catch (e) {
-            toolAnswerEl.textContent = '请求失败：' + e.message;
-            renderSteps(null);
-        } finally {
-            toolRunBtn.disabled = false;
-        }
-    }
-
-    toolRunBtn.addEventListener('click', runTool);
-    refreshToolsBtn.addEventListener('click', loadTools);
-
-    // ==========================================================================
-    // 四、MCP 视图
-    // ==========================================================================
-    const mcpNameEl = document.getElementById('mcpName');
-    const mcpEndpointEl = document.getElementById('mcpEndpoint');
-    const mcpConnectBtn = document.getElementById('mcpConnect');
-    const mcpServerSel = document.getElementById('mcpServer');
-    const mcpToolSel = document.getElementById('mcpTool');
-    const mcpArgsEl = document.getElementById('mcpArgs');
-    const mcpCallBtn = document.getElementById('mcpCall');
-    const mcpResultEl = document.getElementById('mcpResult');
-    const mcpServersEl = document.getElementById('mcpServers');
-    const refreshMcpBtn = document.getElementById('refreshMcp');
-
-    let mcpServers = [];
-    let mcpTools = [];
-
-    function renderMcpServers(servers) {
-        clear(mcpServersEl);
-        if (!servers || servers.length === 0) {
-            empty(mcpServersEl, '暂无已连接服务器');
-            return;
-        }
-        for (const s of servers) {
-            const row = document.createElement('div');
-            row.className = 'doc-item';
-            row.innerHTML =
-                '<span class="doc-name">' + escapeHtml(s.name) + '</span>' +
-                '<span class="doc-meta">' + escapeHtml(s.endpoint || '内置') +
-                ' · 工具 ' + s.toolCount + '</span>';
-            mcpServersEl.appendChild(row);
-        }
-    }
-
-    function fillServerSelect() {
-        const prev = mcpServerSel.value;
-        clear(mcpServerSel);
-        for (const s of mcpServers) {
-            const opt = document.createElement('option');
-            opt.value = s.name;
-            opt.textContent = s.name;
-            mcpServerSel.appendChild(opt);
-        }
-        if (prev) mcpServerSel.value = prev;
-        fillToolSelect();
-    }
-
-    function fillToolSelect() {
-        clear(mcpToolSel);
-        const server = mcpServerSel.value;
-        const tools = mcpTools.filter((t) => t.server === server);
-        for (const t of tools) {
-            const opt = document.createElement('option');
-            opt.value = t.name;
-            opt.textContent = t.name + ' — ' + t.description;
-            mcpToolSel.appendChild(opt);
-        }
-    }
-
-    function loadMcp() {
-        api('/agent/mcp/servers').then((servers) => {
-            mcpServers = servers;
-            renderMcpServers(servers);
-            fillServerSelect();
-        }).catch((e) => empty(mcpServersEl, e.message));
-
-        api('/agent/mcp/tools').then((tools) => {
-            mcpTools = tools;
-            fillToolSelect();
-        }).catch((e) => console.warn('加载 MCP 工具失败：', e.message));
     }
 
     async function connectMcp() {
-        const name = mcpNameEl.value.trim();
+        const name = els.mcpName.value.trim();
+        const endpoint = els.mcpEndpoint.value.trim();
         if (!name) {
-            alert('请填写服务器名称');
+            toast('请填写 MCP server 名称', 'error');
             return;
         }
-        mcpConnectBtn.disabled = true;
+        els.mcpConnect.disabled = true;
         try {
-            await api('/agent/mcp/connect', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: name, endpoint: mcpEndpointEl.value.trim() }),
-            });
-            mcpNameEl.value = '';
-            mcpEndpointEl.value = '';
-            loadMcp();
-        } catch (e) {
-            alert('连接失败：' + e.message);
+            await post(ENDPOINTS.mcpConnect, { name, endpoint });
+            els.mcpName.value = '';
+            els.mcpEndpoint.value = '';
+            await loadMcp();
+            addActivity('MCP server connected', `${name}${endpoint ? ` · ${endpoint}` : ''}`, 'success');
+            toast(`MCP server 已连接：${name}`);
+        } catch (error) {
+            addActivity('MCP connect failed', error.message, 'error');
+            toast(`MCP 连接失败：${error.message}`, 'error');
         } finally {
-            mcpConnectBtn.disabled = false;
+            els.mcpConnect.disabled = false;
         }
     }
 
-    async function callMcp() {
-        const server = mcpServerSel.value;
-        const tool = mcpToolSel.value;
+    async function invokeMcp() {
+        const server = els.mcpServer.value;
+        const tool = els.mcpTool.value;
         if (!server || !tool) {
-            alert('请选择服务器和工具');
+            toast('请选择 MCP server 和 tool', 'error');
             return;
         }
-        let args = mcpArgsEl.value.trim();
-        if (args) {
-            try {
-                JSON.parse(args);
-            } catch (e) {
-                alert('参数不是合法 JSON：' + e.message);
+
+        const argsText = els.mcpArgs.value.trim();
+        if (argsText) {
+            try { JSON.parse(argsText); }
+            catch (error) {
+                toast(`Arguments JSON 不合法：${error.message}`, 'error');
                 return;
             }
         }
-        mcpCallBtn.disabled = true;
-        mcpResultEl.textContent = '调用中…';
+
+        els.mcpCall.disabled = true;
+        els.mcpResult.textContent = 'Invoking…';
+        const startedAt = performance.now();
         try {
-            const data = await api('/agent/mcp/call', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ server: server, tool: tool, arguments: args || null }),
+            const data = await post(ENDPOINTS.mcpCall, {
+                server,
+                tool,
+                // Keep the current backend contract: arguments is a JSON string, not an object.
+                arguments: argsText || null,
             });
-            mcpResultEl.textContent = data.result;
-        } catch (e) {
-            mcpResultEl.textContent = '调用失败：' + e.message;
+            const duration = performance.now() - startedAt;
+            els.mcpResult.textContent = data?.result ?? '(empty result)';
+            addActivity('MCP tool invoked', `${server}/${tool} · ${formatDuration(duration)}`, 'success');
+        } catch (error) {
+            els.mcpResult.textContent = `Invocation failed: ${error.message}`;
+            addActivity('MCP invocation failed', `${server}/${tool} · ${error.message}`, 'error');
         } finally {
-            mcpCallBtn.disabled = false;
+            els.mcpCall.disabled = false;
         }
     }
 
-    mcpConnectBtn.addEventListener('click', connectMcp);
-    mcpCallBtn.addEventListener('click', callMcp);
-    refreshMcpBtn.addEventListener('click', loadMcp);
-    mcpServerSel.addEventListener('change', fillToolSelect);
+    function updateCapabilityCounts() {
+        els.toolCount.textContent = String(state.tools.length);
+        els.inspectorDocCount.textContent = String(state.documents.length);
+        els.mcpCount.textContent = String(state.mcpServers.length);
+    }
 
-    // ==========================================================================
-    // 初始化
-    // ==========================================================================
-    loadMemory();
-    loadDocs();
-    loadTools();
-    loadMcp();
+    async function checkHealth() {
+        els.healthPill.className = 'status-pill checking';
+        els.healthText.textContent = 'Checking runtime';
+        try {
+            const data = await request(ENDPOINTS.health);
+            const status = String(data?.status || 'UP').toUpperCase();
+            const up = status === 'UP';
+            els.healthPill.className = `status-pill ${up ? 'up' : 'down'}`;
+            els.healthText.textContent = up ? 'Runtime healthy' : `Runtime ${status}`;
+        } catch (error) {
+            // Actuator may be disabled/exposed differently. Do not treat that as Agent API failure.
+            els.healthPill.className = 'status-pill checking';
+            els.healthText.textContent = 'Health unavailable';
+            els.healthPill.title = `Actuator health unavailable: ${error.message}`;
+        }
+    }
+
+    async function refreshCapabilities({ quiet = false } = {}) {
+        await Promise.all([loadDocuments(), loadTools(), loadMcp()]);
+        if (!quiet) addActivity('Capabilities refreshed', `${state.tools.length} tools · ${state.documents.length} docs · ${state.mcpServers.length} MCP`, 'success');
+    }
+
+    async function refreshAll() {
+        els.refreshAll.disabled = true;
+        try {
+            await Promise.all([checkHealth(), loadMemory(), refreshCapabilities({ quiet: true })]);
+            addActivity('Runtime state refreshed', 'health + memory + capabilities', 'success');
+        } finally {
+            els.refreshAll.disabled = false;
+        }
+    }
+
+    function syncUserContext() {
+        const userId = currentUserId();
+        state.userId = userId;
+        localStorage.setItem('agent.runtime.userId', userId);
+        state.conversationId = userId
+            ? (localStorage.getItem(`agent.runtime.conversationId.${userId}`) || null)
+            : null;
+        state.messages = [];
+        state.lastRunDuration = null;
+        state.lastRunId = null;
+        state.lastUsage = null;
+        renderMessages();
+        updateRuntimeMeta();
+        loadMemory();
+        addActivity('User context changed', userId || '(empty)', 'success');
+    }
+
+    function bindEvents() {
+        $$('.nav-item').forEach((button) => button.addEventListener('click', () => switchView(button.dataset.view)));
+        $$('.mode-button').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
+
+        els.chatForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            sendMessage();
+        });
+        els.messageInput.addEventListener('input', autoResizeComposer);
+        els.messageInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        });
+        els.userId.addEventListener('change', syncUserContext);
+        els.newSession.addEventListener('click', startNewSession);
+        els.refreshMemory.addEventListener('click', () => loadMemory({ quiet: false }));
+        els.clearMemory.addEventListener('click', clearMemory);
+        els.clearActivity.addEventListener('click', () => { state.activities = []; renderActivity(); });
+        els.refreshAll.addEventListener('click', refreshAll);
+        els.refreshCapabilities.addEventListener('click', () => refreshCapabilities());
+
+        els.openRagRuntime.addEventListener('click', () => { switchView('runtime'); setMode('rag'); });
+        els.openToolRuntime.addEventListener('click', () => { switchView('runtime'); setMode('tool'); });
+        els.uploadDoc.addEventListener('click', uploadDocument);
+        els.refreshDocs.addEventListener('click', () => loadDocuments({ quiet: false }));
+        els.refreshTools.addEventListener('click', () => loadTools({ quiet: false }));
+        els.refreshMcp.addEventListener('click', () => loadMcp({ quiet: false }));
+        els.mcpConnect.addEventListener('click', connectMcp);
+        els.mcpCall.addEventListener('click', invokeMcp);
+        els.mcpServer.addEventListener('change', fillMcpTools);
+
+        els.inspectorToggle.addEventListener('click', () => els.inspector.classList.toggle('open'));
+        els.closeInspector.addEventListener('click', () => els.inspector.classList.remove('open'));
+
+        document.addEventListener('keydown', (event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+                event.preventDefault();
+                switchView('runtime');
+                els.messageInput.focus();
+            }
+            if (event.key === 'Escape') els.inspector.classList.remove('open');
+        });
+    }
+
+    async function init() {
+        els.userId.value = state.userId;
+        bindEvents();
+        bindPromptSuggestions();
+        setMode(state.mode);
+        switchView('runtime');
+        renderMessages();
+        renderMemory();
+        renderDocuments();
+        renderTools();
+        renderMcpServers();
+        renderActivity();
+        updateCapabilityCounts();
+        updateRuntimeMeta();
+        await refreshAll();
+        els.messageInput.focus();
+    }
+
+    init();
 })();
