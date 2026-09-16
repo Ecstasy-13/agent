@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#f5f8fc">
+    <title>Agent Runtime Console</title>
+    <link rel="stylesheet" href="/css/style.css?v=20260912-2">
+</head>
+<body>
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-mark" aria-hidden="true">
+                <span></span><span></span><span></span>
+            </div>
+            <div>
+                <div class="brand-title">Agent Runtime</div>
+                <div class="brand-subtitle">Java Agent Console</div>
+            </div>
+        </div>
+
+        <nav class="nav" aria-label="主导航">
+            <button class="nav-item active" data-view="runtime" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v13H4zM8 9h8M8 13h5"/></svg>
+                <span>Runtime</span>
+            </button>
+            <button class="nav-item" data-view="knowledge" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h11a3 3 0 0 1 3 3v12H8a3 3 0 0 1-3-3zM8 8h7M8 12h7"/></svg>
+                <span>Knowledge</span>
+            </button>
+            <button class="nav-item" data-view="capabilities" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/><circle cx="12" cy="12" r="4"/></svg>
+                <span>Capabilities</span>
+            </button>
+        </nav>
+
+        <div class="sidebar-section">
+            <div class="section-label">Context</div>
+            <label class="field-label" for="userId">User ID</label>
+            <div class="inline-field">
+                <span class="field-prefix">@</span>
+                <input id="userId" type="text" value="001" autocomplete="off" spellcheck="false" aria-label="User ID">
+            </div>
+            <button id="newSession" class="secondary-button full" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                New conversation
+            </button>
+        </div>
+
+        <div class="sidebar-section stack-card">
+            <div class="section-label">Runtime stack</div>
+            <div class="stack-line"><span>Java</span><strong>21</strong></div>
+            <div class="stack-line"><span>Spring Boot</span><strong>3.5.8</strong></div>
+            <div class="stack-line"><span>Spring AI</span><strong>1.1.2</strong></div>
+            <div class="stack-line"><span>Alibaba AI</span><strong>1.1.2.2</strong></div>
+        </div>
+
+        <div class="sidebar-footer">
+            <span class="branch-dot"></span>
+            <span>feature/v2-agent-runtime</span>
+        </div>
+    </aside>
+
+    <main class="main-area">
+        <header class="topbar">
+            <div>
+                <div class="eyebrow">WORKSPACE</div>
+                <h1 id="pageTitle">Runtime Console</h1>
+            </div>
+            <div class="topbar-actions">
+                <div id="healthPill" class="status-pill checking" title="Spring Boot Actuator health">
+                    <span class="status-dot"></span>
+                    <span id="healthText">Checking runtime</span>
+                </div>
+                <button id="refreshAll" class="icon-button" type="button" title="刷新运行时数据" aria-label="刷新运行时数据">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.1 9a7 7 0 0 1 11.6-2.5L20 9M4 15l2.3 2.5A7 7 0 0 0 17.9 15"/></svg>
+                </button>
+                <button id="inspectorToggle" class="icon-button inspector-toggle" type="button" title="切换 Inspector" aria-label="切换 Inspector">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM14 4v16"/></svg>
+                </button>
+            </div>
+        </header>
+
+        <div class="workspace">
+            <div class="views">
+                <section id="view-runtime" class="view runtime-view">
+                    <div class="runtime-header">
+                        <div>
+                            <div class="view-kicker">Agent execution</div>
+                            <h2>Run, inspect, iterate.</h2>
+                            <p>Chat 直接进入 AgentV2Controller；RAG 与 Tool 保留为独立能力入口。</p>
+                        </div>
+                        <div class="mode-control" role="group" aria-label="运行模式">
+                            <button class="mode-button active" type="button" data-mode="chat">Chat</button>
+                            <button class="mode-button" type="button" data-mode="rag">RAG</button>
+                            <button class="mode-button" type="button" data-mode="tool">Tool</button>
+                        </div>
+                    </div>
+
+                    <div id="messages" class="messages" aria-live="polite">
+                        <div id="welcome" class="welcome-card">
+                            <div class="welcome-icon">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 8.5h10M7 12h7M5 4.5h14v13H9l-4 3z"/></svg>
+                            </div>
+                            <div>
+                                <span class="welcome-label">RUNTIME READY</span>
+                                <h3>从一次可观察的 Agent Run 开始</h3>
+                                <p>Chat 使用 <code>POST /api/v2/agent/chat</code>，并持续复用后端返回的 conversationId；每次 Run 的 steps 会直接展示为执行轨迹。</p>
+                                <div class="prompt-suggestions">
+                                    <button type="button" data-prompt="介绍一下你当前具备的能力。">介绍当前能力</button>
+                                    <button type="button" data-prompt="记住我正在重构一个 Java Agent 项目。">测试长期记忆</button>
+                                    <button type="button" data-mode-target="tool" data-prompt="帮我查看当前时间，并说明你调用了什么工具。">测试工具调用</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <form id="chatForm" class="composer">
+                        <div class="composer-meta">
+                            <div class="mode-hint">
+                                <span id="modeBadge" class="mini-badge">CHAT</span>
+                                <span id="modeDescription">Conversation + memory</span>
+                            </div>
+                            <span class="shortcut">Enter 发送 · Shift + Enter 换行</span>
+                        </div>
+                        <div class="composer-input-wrap">
+                            <textarea id="messageInput" rows="1" placeholder="Send a message to the runtime…" aria-label="消息"></textarea>
+                            <button id="sendBtn" class="send-button" type="submit" aria-label="发送">
+                                <span>Run</span>
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6zM12 13l7-8"/></svg>
+                            </button>
+                        </div>
+                    </form>
+                </section>
+
+                <section id="view-knowledge" class="view" hidden>
+                    <div class="page-intro">
+                        <div>
+                            <div class="view-kicker">Retrieval context</div>
+                            <h2>Knowledge Base</h2>
+                            <p>管理用于 RAG 的本地文档。问答统一回到 Runtime Console，避免知识库成为另一套聊天界面。</p>
+                        </div>
+                        <button id="openRagRuntime" class="primary-button" type="button">Open RAG runtime</button>
+                    </div>
+
+                    <div class="content-grid knowledge-grid">
+                        <section class="panel upload-panel">
+                            <div class="panel-heading">
+                                <div>
+                                    <span class="panel-eyebrow">INGEST</span>
+                                    <h3>Add document</h3>
+                                </div>
+                                <span class="endpoint-chip">POST /agent/knowledge/upload</span>
+                            </div>
+                            <label class="form-field">
+                                <span>Document name</span>
+                                <input id="docName" type="text" placeholder="architecture-notes.md">
+                            </label>
+                            <label class="form-field grow">
+                                <span>Content</span>
+                                <textarea id="docContent" placeholder="Paste the document content here…"></textarea>
+                            </label>
+                            <div class="panel-actions">
+                                <span class="helper-text">当前后端按文本内容进行切分与向量化。</span>
+                                <button id="uploadDoc" class="primary-button" type="button">Ingest document</button>
+                            </div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel-heading">
+                                <div>
+                                    <span class="panel-eyebrow">INDEX</span>
+                                    <h3>Documents</h3>
+                                </div>
+                                <button id="refreshDocs" class="text-button" type="button">Refresh</button>
+                            </div>
+                            <div class="metric-row">
+                                <div class="metric"><span id="docCount">0</span><small>documents</small></div>
+                                <div class="metric"><span id="chunkCount">0</span><small>chunks</small></div>
+                            </div>
+                            <div id="docList" class="resource-list"></div>
+                        </section>
+                    </div>
+                </section>
+
+                <section id="view-capabilities" class="view" hidden>
+                    <div class="page-intro">
+                        <div>
+                            <div class="view-kicker">Runtime surface</div>
+                            <h2>Capabilities</h2>
+                            <p>把 Function Calling 与 MCP 当作 Runtime 能力，而不是相互割裂的 Demo 页面。</p>
+                        </div>
+                        <button id="openToolRuntime" class="primary-button" type="button">Open tool runtime</button>
+                    </div>
+
+                    <div class="capability-layout">
+                        <section class="panel">
+                            <div class="panel-heading">
+                                <div>
+                                    <span class="panel-eyebrow">FUNCTION CALLING</span>
+                                    <h3>Registered tools</h3>
+                                </div>
+                                <button id="refreshTools" class="text-button" type="button">Refresh</button>
+                            </div>
+                            <div id="toolList" class="resource-list"></div>
+                        </section>
+
+                        <section class="panel mcp-panel">
+                            <div class="panel-heading">
+                                <div>
+                                    <span class="panel-eyebrow">MODEL CONTEXT PROTOCOL</span>
+                                    <h3>MCP servers</h3>
+                                </div>
+                                <button id="refreshMcp" class="text-button" type="button">Refresh</button>
+                            </div>
+
+                            <div class="mcp-grid">
+                                <div class="subpanel">
+                                    <h4>Connect server</h4>
+                                    <label class="form-field compact">
+                                        <span>Name</span>
+                                        <input id="mcpName" type="text" placeholder="local-tools">
+                                    </label>
+                                    <label class="form-field compact">
+                                        <span>Endpoint <em>optional</em></span>
+                                        <input id="mcpEndpoint" type="text" placeholder="http://localhost:3001">
+                                    </label>
+                                    <button id="mcpConnect" class="secondary-button full" type="button">Connect</button>
+                                </div>
+
+                                <div class="subpanel">
+                                    <h4>Direct invocation</h4>
+                                    <div class="two-col">
+                                        <label class="form-field compact">
+                                            <span>Server</span>
+                                            <select id="mcpServer"></select>
+                                        </label>
+                                        <label class="form-field compact">
+                                            <span>Tool</span>
+                                            <select id="mcpTool"></select>
+                                        </label>
+                                    </div>
+                                    <label class="form-field compact">
+                                        <span>Arguments JSON</span>
+                                        <textarea id="mcpArgs" class="code-input" placeholder='{"query":"agent runtime"}'></textarea>
+                                    </label>
+                                    <button id="mcpCall" class="primary-button full" type="button">Invoke MCP tool</button>
+                                </div>
+                            </div>
+
+                            <div class="mcp-result-wrap">
+                                <div class="subheading">Connected servers</div>
+                                <div id="mcpServers" class="resource-list compact-list"></div>
+                                <div class="subheading result-heading">Last result</div>
+                                <pre id="mcpResult" class="result-console">No invocation yet.</pre>
+                            </div>
+                        </section>
+                    </div>
+                </section>
+            </div>
+
+            <aside id="inspector" class="inspector">
+                <div class="inspector-head">
+                    <div>
+                        <div class="eyebrow">INSPECTOR</div>
+                        <h2>Runtime state</h2>
+                    </div>
+                    <button id="closeInspector" class="icon-button mobile-only" type="button" aria-label="关闭 Inspector">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+                    </button>
+                </div>
+
+                <section class="inspector-section">
+                    <div class="inspector-title-row">
+                        <h3>Run</h3>
+                        <span id="runStateBadge" class="state-badge idle">IDLE</span>
+                    </div>
+                    <dl class="run-stats">
+                        <div><dt>Mode</dt><dd id="inspectorMode">Chat</dd></div>
+                        <div><dt>User</dt><dd id="inspectorUser">001</dd></div>
+                        <div><dt>Conversation</dt><dd id="inspectorConversation">—</dd></div>
+                        <div><dt>Run ID</dt><dd id="inspectorRunId">—</dd></div>
+                        <div><dt>Tokens</dt><dd id="inspectorTokens">—</dd></div>
+                        <div><dt>Last run</dt><dd id="lastRunDuration">—</dd></div>
+                    </dl>
+                </section>
+
+                <section class="inspector-section">
+                    <div class="inspector-title-row">
+                        <h3>Capabilities</h3>
+                        <button id="refreshCapabilities" class="tiny-button" type="button">Refresh</button>
+                    </div>
+                    <div class="capability-stats">
+                        <div><span class="cap-icon">T</span><div><strong id="toolCount">0</strong><small>Tools</small></div></div>
+                        <div><span class="cap-icon">K</span><div><strong id="inspectorDocCount">0</strong><small>Docs</small></div></div>
+                        <div><span class="cap-icon">M</span><div><strong id="mcpCount">0</strong><small>MCP</small></div></div>
+                    </div>
+                </section>
+
+                <section class="inspector-section memory-section">
+                    <div class="inspector-title-row">
+                        <h3>Long-term memory</h3>
+                        <button id="refreshMemory" class="tiny-button" type="button">Refresh</button>
+                    </div>
+                    <div id="memoryList" class="memory-list"></div>
+                    <button id="clearMemory" class="danger-link" type="button">Clear user memory</button>
+                </section>
+
+                <section class="inspector-section activity-section">
+                    <div class="inspector-title-row">
+                        <h3>Client activity</h3>
+                        <button id="clearActivity" class="tiny-button" type="button">Clear</button>
+                    </div>
+                    <div id="activityList" class="activity-list"></div>
+                </section>
+            </aside>
+        </div>
+    </main>
+</div>
+
+<div id="toastHost" class="toast-host" aria-live="polite"></div>
+
+<script src="/js/app.js?v=20260912-2" defer></script>
+</body>
+</html>

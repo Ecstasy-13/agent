@@ -28,7 +28,7 @@ public class ShortMemory {
     private final ConcurrentHashMap<String, Deque<Message>> sessions = new ConcurrentHashMap<>();
 
     public ShortMemory(AgentProperties properties) {
-        this.maxSize = properties.getMemory().getShortTermSize();
+        this.maxSize = properties.getMemory().getMaxStoredMessages();
     }
 
     /**

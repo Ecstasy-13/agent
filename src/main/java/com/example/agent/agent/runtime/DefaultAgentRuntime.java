@@ -1,5 +1,7 @@
 package com.example.agent.agent.runtime;
 
+import com.example.agent.agent.context.ContextWindow;
+import com.example.agent.agent.context.ContextWindowService;
 import com.example.agent.agent.model.AgentRequest;
 import com.example.agent.agent.model.AgentResponse;
 import com.example.agent.agent.model.AgentStepType;
@@ -79,6 +81,8 @@ public class DefaultAgentRuntime implements AgentRuntime {
      */
     private final AgentPromptFactory promptFactory;
 
+    private final ContextWindowService contextWindowService;
+
     /**
      * 大模型访问统一抽象。
      * <p>
@@ -99,13 +103,20 @@ public class DefaultAgentRuntime implements AgentRuntime {
      * 2. 字段可以 final；
      * 3. 更方便单元测试。
      */
-    public DefaultAgentRuntime(ConversationMemory conversationMemory, LongMemoryService longMemoryService, AgentPromptFactory promptFactory, ModelService modelService) {
+    public DefaultAgentRuntime(
+            ConversationMemory conversationMemory,
+            LongMemoryService longMemoryService,
+            AgentPromptFactory promptFactory,
+            ContextWindowService contextWindowService,
+            ModelService modelService) {
 
         this.conversationMemory = conversationMemory;
 
         this.longMemoryService = longMemoryService;
 
         this.promptFactory = promptFactory;
+
+        this.contextWindowService = contextWindowService;
 
         this.modelService = modelService;
     }
@@ -173,26 +184,77 @@ public class DefaultAgentRuntime implements AgentRuntime {
          * ==================================================
          * Step 2：CONTEXT_BUILD
          * ==================================================
+         *
+         * V2 最大变化：
+         *
+         * Redis History
+         * 不再直接全部发送给 LLM。
+         *
+         * 必须经过 Token-aware Context Window。
          */
 
         stepStart = System.nanoTime();
 
+//        List<Message> promptMessages = promptFactory.build(userProfile, history, request.message());
+        Message systemMessage = promptFactory.buildSystemMessage(userProfile);
         /*
-         * 生成本轮真正发送给 LLM 的消息。
+         * 当前用户 Message。
          *
-         * 大概是：
-         *
-         * System Prompt
-         * +
-         * Long Memory
-         * +
-         * History
-         * +
-         * Current Message
+         * 注意：
+         * 当前消息暂时还没有存进 Redis，
+         * Model 成功以后再保存完整 Turn。
          */
-        List<Message> promptMessages = promptFactory.build(userProfile, history, request.message());
+        Message currentUserMessage = Message.user(request.message());
+        /*
+         * 根据：
+         *
+         * Token Budget
+         * +
+         * Recent History
+         * +
+         * Complete Turn
+         *
+         * 选择最终上下文。
+         */
+        ContextWindow contextWindow =
+                contextWindowService.build(
+                        systemMessage,
+                        history,
+                        currentUserMessage
+                );
+        List<Message> promptMessages = contextWindow.messages();
 
-        context.addStep(AgentStepType.CONTEXT_BUILD, "build-context", elapsedMs(stepStart), Map.of("promptMessageCount", promptMessages.size()));
+        context.addStep(AgentStepType.CONTEXT_BUILD, "build-context", elapsedMs(stepStart),
+                Map.of(
+                        /*
+                         * Redis 原本保存多少历史。
+                         */
+                        "totalHistoryMessages",
+                        contextWindow.totalHistoryMessages(),
+                        /*
+                         * 本轮实际使用多少历史。
+                         */
+                        "selectedHistoryMessages",
+                        contextWindow.selectedHistoryMessages(),
+                        /*
+                         * 因 Token Budget 丢弃多少。
+                         */
+                        "droppedHistoryMessages",
+                        contextWindow.droppedHistoryMessages(),
+                        /*
+                         * 最终 Context 预估 Token。
+                         */
+                        "estimatedPromptTokens",
+                        contextWindow.estimatedTokens(),
+                        /*
+                         * 最终真正发送的 Message 数。
+                         *
+                         * 包含：
+                         * System + History + Current User。
+                         */
+                        "promptMessageCount",promptMessages.size()
+                )
+        );
 
         /*
          * ==================================================

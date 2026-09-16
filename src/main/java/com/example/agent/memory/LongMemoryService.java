@@ -157,9 +157,9 @@ public class LongMemoryService {
      */
     @Async
     public void extractAndSave(String userId, String userMessage) {
-        if (!properties.getMemory().isExtractEnabled()) {
-            return;
-        }
+//        if (!properties.getMemory().isExtractEnabled()) {
+//            return;
+//        }
         try {
             List<Fact> facts = extractFacts(userMessage);
             for (Fact fact : facts) {

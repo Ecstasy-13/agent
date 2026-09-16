@@ -32,7 +32,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * InMemoryConversationMemory。
  */
-@Component
+
 public class InMemoryConversationMemory implements ConversationMemory {
 
     /**
@@ -65,7 +65,7 @@ public class InMemoryConversationMemory implements ConversationMemory {
     public InMemoryConversationMemory(AgentProperties properties) {
         this.maxSize = properties
                         .getMemory()
-                        .getShortTermSize();
+                .getMaxStoredMessages();
     }
 
     /**
@@ -153,7 +153,6 @@ public class InMemoryConversationMemory implements ConversationMemory {
              * [2,3,4]
              */
             while (deque.size() > maxSize) {
-
                 deque.removeFirst();
             }
         }
