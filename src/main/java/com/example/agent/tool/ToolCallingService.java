@@ -1,6 +1,10 @@
 package com.example.agent.tool;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.example.agent.entity.Order;
+import com.example.agent.knowledge.KnowledgeService;
 import com.example.agent.llm.ToolDefinition;
+import com.example.agent.repository.OrderMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -11,6 +15,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Tool Calling 工具调用服务（第四阶段）。
@@ -26,20 +31,24 @@ public class ToolCallingService {
 
     private static final Logger log = LoggerFactory.getLogger(ToolCallingService.class);
 
+    /** 知识库检索工具默认返回片段数 */
+    private static final int KNOWLEDGE_TOP_K = 3;
+
+    private final KnowledgeService knowledgeService;
+    private final OrderMapper orderMapper;
     private final ObjectMapper objectMapper;
     private final Map<String, Tool> registry = new LinkedHashMap<>();
 
-    public ToolCallingService(ObjectMapper objectMapper) {
+    public ToolCallingService(ObjectMapper objectMapper, OrderMapper orderMapper, KnowledgeService knowledgeService) {
         this.objectMapper = objectMapper;
+        this.orderMapper = orderMapper;
+        this.knowledgeService = knowledgeService;
 
         // 示例工具 1：查询订单状态
         register("query_order", "根据订单编号查询订单状态",
                 Map.of("orderId", Map.of("type", "string", "description", "订单编号")),
                 List.of("orderId"),
-                args -> {
-                    String orderId = str(args, "orderId");
-                    return "订单 " + orderId + " 当前状态：已发货（示例模拟数据，实际应查询订单数据库）";
-                });
+                args -> queryOrder(str(args, "orderId")));
 
         // 示例工具 2：查询天气
         register("get_weather", "查询指定城市的天气",
@@ -59,6 +68,62 @@ public class ToolCallingService {
                     double value = new ExprParser(expression).parse();
                     return "计算结果：" + trim(value);
                 });
+        /**
+         * 工具 4：知识库检索（Agentic RAG）。
+         *
+         * 与传统 RAG"每次提问都先检索"不同，
+         * 这里把检索能力包装成一个工具，
+         * 由模型自己判断"这个问题是否需要参考已上传的资料"。
+         *
+         * 例如闲聊类问题模型会直接回答，不调用这个工具；
+         * 涉及企业内部文档、产品细节等问题，模型会主动调用。
+         */
+        register("search_knowledge_base",
+                "当用户的问题可能需要参考已上传的知识库文档才能准确回答时调用此工具，"
+                        + "输入查询内容，返回最相关的资料片段。如果问题是常识性的、不需要查阅资料，不要调用此工具。",
+                Map.of("query", Map.of("type", "string", "description", "要检索的问题或关键词")),
+                List.of("query"),
+                args -> searchKnowledgeBase(str(args, "query")));
+    }
+
+    /**
+     * 查询订单的真实实现。
+     *
+     * <p>注意防御式编程：
+     * 1. 查不到时返回一句人话，而不是抛异常打断整个对话；
+     * 2. 不直接把 orderId 拼接成 SQL，全部走 MyBatis-Plus 参数化查询，杜绝 SQL 注入风险。
+     */
+    private String queryOrder(String orderNo) {
+        if (orderNo == null || orderNo.isBlank()) {
+            return "未提供订单编号，无法查询";
+        }
+        LambdaQueryWrapper<Order> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Order::getOrderNo, orderNo);
+        Order order = orderMapper.selectOne(wrapper);
+        if (order == null) {
+            return "未找到订单 " + orderNo + "，请确认订单编号是否正确";
+        }
+        return "订单 " + order.getOrderNo() + "：" + order.getProductName()
+                + "，金额 " + order.getAmount() + " 元，当前状态：" + order.statusText();
+    }
+
+    /**
+     * 知识库检索的真实实现。
+     *
+     * <p>命中为空时要返回一句明确的话，而不是空字符串，
+     * 避免模型收到空结果后产生"资料检索成功但内容为空"的误解。
+     */
+    private String searchKnowledgeBase(String query) {
+        if (query == null || query.isBlank()) {
+            return "未提供检索关键词";
+        }
+        List<KnowledgeService.Hit> hits = knowledgeService.search(query, KNOWLEDGE_TOP_K);
+        if (hits.isEmpty()) {
+            return "知识库中没有找到与「" + query + "」相关的内容";
+        }
+        return hits.stream()
+                .map(h -> "【来源：" + h.documentName() + "】" + h.text())
+                .collect(Collectors.joining("\n\n"));
     }
 
     /** 返回全部工具的声明（供大模型 {@code tools} 字段使用） */
@@ -104,7 +169,7 @@ public class ToolCallingService {
         }
         try {
             String result = tool.executor().execute(args);
-            log.info("工具执行，name={}, args={} -> {}", name, args, result);
+            log.info("工具执行，name={}, args={} -> {}", name, args, result.length() > 200 ? result.substring(0, 200) + "..." : result);
             return result;
         } catch (Exception e) {
             return "工具执行失败：" + e.getMessage();

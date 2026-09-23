@@ -11,13 +11,22 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 
+
 /**
  * Agent 核心控制类，负责编排一次完整对话流程。
  *
  * <p>对应需求文档 4.2 / 6.2 Agent 模块核心类 {@code SimpleAgent}。
  * 流程：接收用户请求 -> 构造 Prompt -> 调用大模型 -> 管理上下文 -> 返回结果。
+ *
+ * @deprecated 这是 V1 阶段的简单实现，不具备 Memory 的 Token 预算管理、
+ * Trace 记录、Tool Calling、RAG 等能力。调用链路已被
+ * {@link com.example.agent.agent.runtime.DefaultAgentRuntime}（V2）取代，
+ * 通过 {@code AgentV2Controller} 暴露的 {@code /api/v2/agent/chat} 对外服务。
+ * 保留此类仅为兼容尚未切换的旧前端调用 {@code /agent/chat}，
+ * 新功能开发不应基于此类继续扩展，确认无外部依赖后可以直接删除。
  */
 @Service
+@Deprecated
 public class SimpleAgent {
 
     private static final Logger log = LoggerFactory.getLogger(SimpleAgent.class);

@@ -70,6 +70,15 @@ public enum AgentStepType {
     LLM_CALL,
 
     /**
+     * 执行一次工具调用。
+     *
+     * <p>包括：
+     * 业务工具（query_order / get_weather / calculator）
+     * 以及知识库检索工具（search_knowledge_base）。
+     */
+    TOOL_CALL,
+
+    /**
      * 保存本轮对话产生的记忆。
      *
      * V1 主要包括：

@@ -1,6 +1,8 @@
 package com.example.agent.agent.context;
 
 import com.example.agent.config.AgentProperties;
+import com.example.agent.exception.AgentBusinessException;
+import com.example.agent.exception.ErrorCode;
 import com.example.agent.model.Message;
 import org.springframework.stereotype.Service;
 
@@ -104,12 +106,7 @@ public class ContextWindowService {
          * 发给 LLM。
          */
         if (historyBudget < 0) {
-            throw new IllegalArgumentException(
-                    "当前用户输入超过 Context Token Budget，"
-                            + "fixedTokens="
-                            + fixedTokens
-                            + ", maxInputTokens="
-                            + maxInputTokens
+            throw new AgentBusinessException(ErrorCode.CONTEXT_BUDGET_EXCEEDED, "fixedTokens=" + fixedTokens + ", maxInputTokens=" + maxInputTokens
             );
         }
         /*

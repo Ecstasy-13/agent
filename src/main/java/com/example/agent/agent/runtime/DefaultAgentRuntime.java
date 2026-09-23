@@ -5,18 +5,26 @@ import com.example.agent.agent.context.ContextWindowService;
 import com.example.agent.agent.model.AgentRequest;
 import com.example.agent.agent.model.AgentResponse;
 import com.example.agent.agent.model.AgentStepType;
+import com.example.agent.agent.model.AgentUsage;
+import com.example.agent.config.AgentProperties;
+import com.example.agent.exception.AgentBusinessException;
+import com.example.agent.exception.ErrorCode;
 import com.example.agent.llm.ModelCallResult;
 import com.example.agent.llm.ModelService;
+import com.example.agent.llm.ToolDefinition;
 import com.example.agent.memory.ConversationMemory;
 import com.example.agent.memory.LongMemoryService;
 import com.example.agent.model.Message;
+import com.example.agent.model.ToolCall;
 import com.example.agent.prompt.AgentPromptFactory;
 
+import com.example.agent.tool.ToolCallingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -90,6 +98,12 @@ public class DefaultAgentRuntime implements AgentRuntime {
      */
     private final ModelService modelService;
 
+    /** Function Calling / Agentic RAG 工具注册表 */
+    private final ToolCallingService toolCallingService;
+
+    /** agent.tool.max-rounds 等配置 */
+    private final AgentProperties properties;
+
     /**
      * 使用构造器注入依赖。
      * <p>
@@ -108,7 +122,9 @@ public class DefaultAgentRuntime implements AgentRuntime {
             LongMemoryService longMemoryService,
             AgentPromptFactory promptFactory,
             ContextWindowService contextWindowService,
-            ModelService modelService) {
+            ModelService modelService,
+            ToolCallingService toolCallingService,
+            AgentProperties properties) {
 
         this.conversationMemory = conversationMemory;
 
@@ -119,6 +135,10 @@ public class DefaultAgentRuntime implements AgentRuntime {
         this.contextWindowService = contextWindowService;
 
         this.modelService = modelService;
+
+        this.toolCallingService = toolCallingService;
+
+        this.properties = properties;
     }
 
     /**
@@ -176,9 +196,9 @@ public class DefaultAgentRuntime implements AgentRuntime {
          * 我们只记录数量等轻量 metadata，
          * 不直接把所有聊天内容放进 Trace。
          */
-        context.addStep(AgentStepType.MEMORY_LOAD, "load-memory", elapsedMs(stepStart), Map.of("historyMessageCount", history.size(),
-
-                "hasLongTermProfile", userProfile != null && !userProfile.isBlank()));
+        context.addStep(AgentStepType.MEMORY_LOAD, "load-memory", elapsedMs(stepStart),
+                Map.of("historyMessageCount", history.size(),
+                        "hasLongTermProfile", userProfile != null && !userProfile.isBlank()));
 
         /*
          * ==================================================
@@ -351,6 +371,72 @@ public class DefaultAgentRuntime implements AgentRuntime {
         log.info("Agent run completed, runId={}, conversationId={}, durationMs={}", response.runId(), response.conversationId(), response.totalDurationMs());
 
         return response;
+    }
+
+    /**
+     * Tool Loop 核心逻辑。
+     *
+     * <p>每一轮：
+     *
+     * 1. 调用模型（记录一个 LLM_CALL Step）；
+     * 2. 如果模型返回 toolCalls，逐个执行（每个工具记录一个 TOOL_CALL Step），
+     *    把工具调用请求与执行结果追加进消息列表，进入下一轮；
+     * 3. 如果模型没有返回 toolCalls，说明给出了最终答案，结束循环。
+     *
+     * <p>超过 {@code agent.tool.max-rounds} 仍未给出最终答案时，
+     * 抛出 {@link AgentBusinessException}（{@link ErrorCode#TOOL_ROUNDS_EXCEEDED}），
+     * 由 {@code GlobalExceptionHandler} 统一处理，而不是把一句兜底文案当成正常答案返回。
+     */
+    private String runToolLoop(AgentRunContext context, List<Message> initialMessages) {
+
+        List<ToolDefinition> tools = toolCallingService.toolDefinitions();
+        List<Message> messages = new ArrayList<>(initialMessages);
+        int maxRounds = properties.getTool().getMaxRounds();
+
+        AgentUsage totalUsage = AgentUsage.empty();
+
+        for (int round = 0; round < maxRounds; round++) {
+
+            long stepStart = System.nanoTime();
+
+            ModelCallResult result = modelService.chatWithTools(messages, tools);
+
+            totalUsage = totalUsage.plus(result.usage());
+
+            context.addStep(AgentStepType.LLM_CALL, "chat-model-round-" + round, elapsedMs(stepStart), Map.of(
+                    "round", round,
+                    "hasToolCalls", result.hasToolCalls(),
+                    "answerLength", result.content() == null ? 0 : result.content().length()));
+
+            if (!result.hasToolCalls()) {
+                context.setUsage(totalUsage);
+                return result.content();
+            }
+
+            /*
+             * 模型请求调用工具：
+             * 先把"助手想调用哪些工具"这条消息加入上下文，
+             * 再依次执行每个工具，把结果作为 role=tool 的消息追加进去，
+             * 下一轮模型调用时就能看到工具执行结果。
+             */
+            messages.add(Message.assistantToolCall(result.toolCalls()));
+
+            for (ToolCall call : result.toolCalls()) {
+
+                long toolStepStart = System.nanoTime();
+
+                String toolResult = toolCallingService.execute(call.function().name(), call.function().arguments());
+
+                context.addStep(AgentStepType.TOOL_CALL, call.function().name(), elapsedMs(toolStepStart), Map.of(
+                        "toolName", call.function().name(),
+                        "resultLength", toolResult.length()));
+
+                messages.add(Message.tool(call.id(), toolResult));
+            }
+        }
+
+        context.setUsage(totalUsage);
+        throw new AgentBusinessException(ErrorCode.TOOL_ROUNDS_EXCEEDED, "maxRounds=" + maxRounds);
     }
 
     /**

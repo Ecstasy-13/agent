@@ -84,4 +84,25 @@ public record AgentUsage(
                 null
         );
     }
+
+    /**
+     * 把当前 Usage 与另一次调用的 Usage 相加。
+     *
+     * <p>任意一方某个字段为 {@code null}（Provider 未返回该指标）时，
+     * 按 0 处理，避免整体变成 null。
+     */
+    public AgentUsage plus(AgentUsage other) {
+        if (other == null) {
+            return this;
+        }
+        return new AgentUsage(
+                nullToZero(promptTokens) + nullToZero(other.promptTokens),
+                nullToZero(completionTokens) + nullToZero(other.completionTokens),
+                nullToZero(totalTokens) + nullToZero(other.totalTokens)
+        );
+    }
+
+    private static int nullToZero(Integer v) {
+        return v == null ? 0 : v;
+    }
 }

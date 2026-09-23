@@ -31,6 +31,7 @@ import java.util.List;
  */
 @RestController
 @RequestMapping("/agent")
+@Deprecated
 public class AgentController {
 
     private final SimpleAgent agent;

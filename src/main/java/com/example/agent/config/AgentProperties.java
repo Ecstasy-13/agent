@@ -3,6 +3,7 @@ package com.example.agent.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import javax.tools.Tool;
 import java.time.Duration;
 
 /**
@@ -24,6 +25,11 @@ public class AgentProperties {
      */
     private Context context = new Context();
 
+    /**
+     * Tool Calling Agent Loop 配置。
+     */
+    private Tool tool = new Tool();
+
     public Memory getMemory() {
         return memory;
     }
@@ -39,6 +45,10 @@ public class AgentProperties {
     public void setContext(Context context) {
         this.context = context;
     }
+
+    public Tool getTool() { return tool; }
+
+    public void setTool(Tool tool) { this.tool = tool; }
 
     /**
      * Conversation Memory 配置。
@@ -147,6 +157,29 @@ public class AgentProperties {
 
         public void setSafetyMarginTokens(int safetyMarginTokens) {
             this.safetyMarginTokens = safetyMarginTokens;
+        }
+    }
+
+
+    /**
+     * Tool Calling Agent Loop 配置。
+     */
+    public static class Tool {
+
+        /**
+         * 一次 Agent Run 中，Tool Loop 最大允许的模型调用轮次。
+         * <p>
+         * 防止模型陷入"反复调用工具但始终不给最终答案"的死循环，
+         * 超过这个轮次会抛出 {@code TOOL_ROUNDS_EXCEEDED} 业务异常。
+         */
+        private int maxRounds = 5;
+
+        public int getMaxRounds() {
+            return maxRounds;
+        }
+
+        public void setMaxRounds(int maxRounds) {
+            this.maxRounds = maxRounds;
         }
     }
 }
